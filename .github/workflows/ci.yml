@@ -1,0 +1,45 @@
+# CI/CD pipeline: GitHub runs this automatically on every push / pull request.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Stage 1 - CI: run the tests
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: pytest -v
+
+  # Stage 2 - Build: make sure the Docker image builds and actually starts
+  docker:
+    needs: test          # only runs if tests passed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t mini-todo .
+      - name: Smoke test the container
+        run: |
+          docker run -d -p 8080:8080 --name app mini-todo
+          sleep 3
+          curl --fail http://localhost:8080/health
+
+  # Stage 3 - CD: tell Render to deploy (only on main, only if everything above passed)
+  deploy:
+    needs: docker
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK" ]; then echo "No RENDER_DEPLOY_HOOK_URL secret set - skipping deploy"; exit 0; fi
+          curl --fail -X POST "$HOOK"
